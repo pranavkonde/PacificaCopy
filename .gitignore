@@ -1,0 +1,27 @@
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node / Next
+node_modules/
+.next/
+npm-debug.log*
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# IDE / tooling
+.cursor/
+.idea/
+.vscode/
+
+# Misc build artifacts
+dist/
+build/
+coverage/
