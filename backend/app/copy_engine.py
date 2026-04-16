@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import random
-import time
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
@@ -16,8 +14,6 @@ from app.pacifica_client import PacificaClient
 
 logger = logging.getLogger(__name__)
 
-SYMBOLS = ["BTC", "ETH", "SOL", "AVAX", "ARB"]
-
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -28,6 +24,8 @@ def _side_pnl(side: str, entry: float, exit_px: float, amount: float) -> float:
         return (exit_px - entry) * amount
     return (entry - exit_px) * amount
 
+
+# ── Expert position helpers ──────────────────────────────────────────
 
 def _close_copied_row(sb: Client, sub: dict[str, Any], row: dict[str, Any], exit_px: float, reason: str) -> None:
     entry = float(row["entry_price"])
@@ -119,12 +117,17 @@ def _insert_expert_from_api(sb: Client, wallet: str, p: dict[str, Any], source: 
         return None
 
 
-async def _sync_expert_pacifica(sb: Client, pc: PacificaClient, wallet: str, marks: dict[str, float]) -> None:
+# ── Sync from Pacifica API ───────────────────────────────────────────
+
+async def _sync_expert_pacifica(sb: Client, pc: PacificaClient, wallet: str, marks: dict[str, float]) -> bool:
+    """Sync a single expert wallet from the live Pacifica positions API.
+    Returns True if the API call succeeded, False otherwise.
+    """
     rows = sb.table("expert_open_positions").select("*").eq("trader_wallet", wallet).execute().data or []
     db_by_key = {(r["symbol"], r["side"]): r for r in rows}
     api_list = await pc.get_positions(wallet)
     if api_list is None:
-        return
+        return False
     api_by_key = {(p["symbol"], p["side"]): p for p in api_list}
 
     for key, row in list(db_by_key.items()):
@@ -136,41 +139,21 @@ async def _sync_expert_pacifica(sb: Client, pc: PacificaClient, wallet: str, mar
     for key, p in api_by_key.items():
         if key not in db_by_key:
             _insert_expert_from_api(sb, wallet, p, "pacifica")
+    return True
 
 
-def _simulate_expert_tick(sb: Client, wallet: str, marks: dict[str, float]) -> None:
-    rng = random.Random(int(time.time()) // 8 + hash(wallet) % 100000)
-    rows = sb.table("expert_open_positions").select("*").eq("trader_wallet", wallet).execute().data or []
+async def ensure_expert_synced_from_pacifica(
+    sb: Client, pc: PacificaClient, wallet: str, marks: dict[str, float]
+) -> None:
+    """Sync a single expert wallet from the Pacifica API.
+    If the API call fails (e.g. invalid wallet format), log a warning and skip.
+    """
+    ok = await _sync_expert_pacifica(sb, pc, wallet, marks)
+    if not ok:
+        logger.warning("Pacifica sync failed for wallet %s — skipping (not a valid Solana address?)", wallet[:12])
 
-    if rows and rng.random() < 0.07:
-        row = rng.choice(rows)
-        mark = marks.get(row["symbol"], float(row["entry_price"]) * (1 + rng.uniform(-0.02, 0.02)))
-        _close_all_copies_for_expert_position(sb, row["id"], marks)
-        _close_expert_position(sb, row, mark)
 
-    if len(rows) < 4 and rng.random() < 0.09:
-        sym = rng.choice(SYMBOLS)
-        side = "bid" if rng.random() > 0.45 else "ask"
-        base = marks.get(sym, 100 + rng.random() * 50)
-        entry = base * (1 + rng.uniform(-0.001, 0.001))
-        amount = round(rng.uniform(0.02, 0.6), 4)
-        key = (sym, side)
-        existing = {(r["symbol"], r["side"]) for r in rows}
-        if key in existing:
-            return
-        row = {
-            "trader_wallet": wallet,
-            "symbol": sym,
-            "side": side,
-            "amount": amount,
-            "entry_price": round(entry, 6),
-            "funding": 0,
-            "opened_at": _utcnow(),
-            "updated_at": _utcnow(),
-            "source": "simulated",
-        }
-        sb.table("expert_open_positions").insert(row).execute()
-
+# ── Copy subscription mirroring ──────────────────────────────────────
 
 def _maybe_stop_max_loss(sb: Client, sub: dict[str, Any], marks: dict[str, float]) -> bool:
     sid = sub["id"]
@@ -333,6 +316,8 @@ def _refresh_follower_counts(sb: Client) -> None:
         ).execute()
 
 
+# ── Main copy engine loop ────────────────────────────────────────────
+
 async def run_copy_cycle() -> None:
     try:
         sb = get_supabase()
@@ -340,28 +325,24 @@ async def run_copy_cycle() -> None:
         logger.warning("Supabase not configured; skipping copy cycle")
         return
     pc = PacificaClient()
-    marks = await pc.get_prices()
+    marks = await pc.get_prices_map()
 
     subs = sb.table("copy_subscriptions").select("expert_wallet").eq("status", "active").execute().data or []
     experts = list({s["expert_wallet"] for s in subs})
     if not experts:
-        _update_unrealized(sb, marks)
+        await asyncio.to_thread(_update_unrealized, sb, marks)
         return
-
-    meta_rows = sb.table("traders").select("wallet,is_simulated").in_("wallet", experts).execute().data or []
-    is_sim = {m["wallet"]: m["is_simulated"] for m in (meta_rows or [])}
 
     for w in experts:
         try:
-            if is_sim.get(w, True):
-                await asyncio.to_thread(_simulate_expert_tick, sb, w, marks)
-            else:
-                await _sync_expert_pacifica(sb, pc, w, marks)
+            ok = await _sync_expert_pacifica(sb, pc, w, marks)
+            if not ok:
+                logger.info("Pacifica sync skipped for %s (API returned error)", w[:12])
         except Exception as e:
-            logger.exception("expert sync failed %s: %s", w[:10], e)
+            logger.exception("expert sync failed %s: %s", w[:12], e)
 
     active_subs = sb.table("copy_subscriptions").select("*").eq("status", "active").execute().data or []
-    for sub in active_subs or []:
+    for sub in active_subs:
         try:
             fresh = (
                 sb.table("copy_subscriptions")

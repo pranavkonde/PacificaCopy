@@ -3,10 +3,13 @@ import { PacificaLivePanel } from "@/components/pacifica-live-panel";
 import { formatPct, formatUsd, shortAddress } from "@/lib/format";
 
 type PreviewRow = {
+  rank?: number;
   wallet: string;
+  data_source?: string;
   profit_week: string;
   profit_month: string;
   profit_all_time: string;
+  profit_24h?: string;
   win_rate: string;
   follower_count: number;
 };

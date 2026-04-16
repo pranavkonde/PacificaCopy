@@ -28,12 +28,12 @@ function NavInner() {
           {!ready ? (
             <span className="eyebrow">...</span>
           ) : authenticated ? (
-            <>
+            <div className="flex items-center gap-4">
               {wallet && <span className="text-xs text-[var(--muted-fg)]">{shortAddress(wallet, 6, 6)}</span>}
               <button type="button" className="btn-secondary" onClick={() => logout()}>
                 <span>Log out</span>
               </button>
-            </>
+            </div>
           ) : (
             <button type="button" className="btn-primary" onClick={() => login()}>
               <span>Connect wallet</span>

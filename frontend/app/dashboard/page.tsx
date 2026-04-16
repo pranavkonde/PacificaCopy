@@ -72,7 +72,7 @@ function DashboardInner() {
   useEffect(() => {
     if (!ready || !authenticated || !follower) return;
     void load();
-    const t = setInterval(() => void load(), 7000);
+    const t = setInterval(() => void load(), 10000);
     return () => clearInterval(t);
   }, [ready, authenticated, follower, load]);
 

@@ -22,7 +22,10 @@ def start_copy(
     expert = expert_wallet.strip()
     ex = sb.table("traders").select("wallet").eq("wallet", expert).maybe_single().execute()
     if not ex.data:
-        raise HTTPException(404, "Expert trader not found")
+        try:
+            sb.table("traders").insert({"wallet": expert, "is_simulated": False}).execute()
+        except Exception:
+            pass
     if expert == auth.wallet:
         raise HTTPException(400, "Cannot copy your own wallet")
 

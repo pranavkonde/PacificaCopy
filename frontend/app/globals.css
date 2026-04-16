@@ -195,6 +195,20 @@ body::before {
   padding: 0.8rem 0.4rem;
 }
 
+/* Tailwind alignment classes on <th> should win.
+   Without this, `.data-table th { text-align: ... }` can override `.text-right` in markup. */
+.data-table th.text-right {
+  text-align: right;
+}
+
+.data-table th.text-center {
+  text-align: center;
+}
+
+.data-table th.text-left {
+  text-align: left;
+}
+
 .data-table td {
   padding: 0.8rem 0.4rem;
   border-bottom: 1px solid var(--line-soft);

@@ -1,19 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "@/lib/api";
 import { formatPct, formatUsd, shortAddress } from "@/lib/format";
 
 type Row = {
   rank: number;
   wallet: string;
-  is_simulated: boolean;
-  data_source: "simulated" | "pacifica";
+  username?: string | null;
+  data_source: string;
   profit_week: string;
   profit_month: string;
   profit_all_time: string;
+  profit_24h?: string;
   win_rate: string;
+  account_equity?: string;
+  volume_30d?: string;
   follower_count: number;
 };
 
@@ -38,24 +41,25 @@ export default function LeaderboardPage() {
     return q.toString();
   }, [period, debouncedSearch]);
 
+  const load = useCallback(async (showLoading: boolean) => {
+    if (showLoading) setLoading(true);
+    setErr(null);
+    try {
+      const data = await apiFetch<Row[]>(`/api/leaderboard?${queryString}`);
+      setRows(data);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Failed to load");
+    } finally {
+      setLoading(false);
+    }
+  }, [queryString]);
+
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      setLoading(true);
-      setErr(null);
-      try {
-        const data = await apiFetch<Row[]>(`/api/leaderboard?${queryString}`);
-        if (!cancelled) setRows(data);
-      } catch (e) {
-        if (!cancelled) setErr(e instanceof Error ? e.message : "Failed to load");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [queryString]);
+    void load(true);
+    const t = setInterval(() => { if (!cancelled) void load(false); }, 15000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [load]);
 
   return (
     <div className="space-y-12">
@@ -64,6 +68,7 @@ export default function LeaderboardPage() {
         <h1 className="editorial-title mt-3 text-5xl md:text-7xl">
           Trader <span className="editorial-italic">Leaderboard</span>
         </h1>
+        <p className="mt-2 text-xs text-[var(--muted-fg)]">Live data from Pacifica · refreshes every 15s</p>
       </header>
 
       <section className="grid gap-8 border-t border-[var(--fg)] py-8 md:grid-cols-[1fr_auto] md:items-end">
@@ -84,42 +89,42 @@ export default function LeaderboardPage() {
       {err && <p className="text-sm text-red-700">{err}</p>}
 
       <div className="overflow-x-auto border-t border-[var(--fg)]">
-        <table className="data-table min-w-[900px]">
+        <table className="data-table min-w-[1100px]">
           <thead>
             <tr>
-              <th>Rank</th>
-              <th>Wallet</th>
-              <th>Source</th>
-              <th className="text-right">Week</th>
-              <th className="text-right">Month</th>
+              <th>#</th>
+              <th>Trader</th>
+              <th className="text-right">24h PnL</th>
+              <th className="text-right">7d PnL</th>
+              <th className="text-right">30d PnL</th>
               <th className="text-right">All time</th>
-              <th className="text-right">Win rate</th>
+              <th className="text-right">Equity</th>
+              <th className="text-right">Vol 30d</th>
               <th className="text-right">Followers</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={8} className="py-12 text-center text-[var(--muted-fg)]">Loading leaderboard...</td></tr>
+              <tr><td colSpan={9} className="py-12 text-center text-[var(--muted-fg)]">Loading leaderboard...</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={8} className="py-12 text-center text-[var(--muted-fg)]">No traders match this filter.</td></tr>
+              <tr><td colSpan={9} className="py-12 text-center text-[var(--muted-fg)]">No traders match this filter.</td></tr>
             ) : (
               rows.map((r) => (
                 <tr key={r.wallet}>
-                  <td>{r.rank}</td>
+                  <td className="text-[var(--muted-fg)]">{r.rank}</td>
                   <td>
                     <Link href={`/traders/${encodeURIComponent(r.wallet)}`} className="hover:text-[var(--accent)] transition-colors duration-500">
-                      {shortAddress(r.wallet, 8, 6)}
+                      {r.username || shortAddress(r.wallet, 6, 4)}
                     </Link>
                   </td>
-                  <td>
-                    <span className={`px-2 py-1 text-[10px] uppercase tracking-[0.2em] ${r.data_source === "pacifica" ? "text-emerald-700" : "text-[var(--muted-fg)]"}`}>
-                      {r.data_source}
-                    </span>
+                  <td className={`text-right ${Number(r.profit_24h ?? 0) >= 0 ? "text-emerald-700" : "text-red-700"}`}>
+                    {r.profit_24h != null ? formatUsd(r.profit_24h) : "—"}
                   </td>
                   <td className={`text-right ${Number(r.profit_week) >= 0 ? "text-emerald-700" : "text-red-700"}`}>{formatUsd(r.profit_week)}</td>
                   <td className={`text-right ${Number(r.profit_month) >= 0 ? "text-emerald-700" : "text-red-700"}`}>{formatUsd(r.profit_month)}</td>
                   <td className={`text-right ${Number(r.profit_all_time) >= 0 ? "text-emerald-700" : "text-red-700"}`}>{formatUsd(r.profit_all_time)}</td>
-                  <td className="text-right">{formatPct(r.win_rate)}</td>
+                  <td className="text-right">{r.account_equity ? formatUsd(r.account_equity) : "—"}</td>
+                  <td className="text-right text-[var(--muted-fg)]">{r.volume_30d ? formatUsd(r.volume_30d) : "—"}</td>
                   <td className="text-right">{r.follower_count}</td>
                 </tr>
               ))
